@@ -1,1 +1,0 @@
-<用户上传的 Kai-Che-Zhi-Da-1.3.1.user.js 原文，保持不变>
