@@ -2,7 +2,7 @@
 // @name         开车直达
 // @version      1.7.1
 // @namespace    theMax24.jiaochezhida
-// @description  开车直达：仅原默认车型，固定原色；保留收藏、五车库、尺寸调整与配置备份。
+// @description  一键收藏网页，可以设置密码，进行私密收藏。多收藏夹，多网页收藏。
 // @author       theMax24
 // @match        *://*/*
 // @grant        GM_getValue
