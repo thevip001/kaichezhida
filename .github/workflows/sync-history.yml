@@ -1,0 +1,70 @@
+name: Sync latest history to root
+on:
+  push:
+    branches: [main]
+    paths:
+      - '历史版本/**'
+      - '.github/workflows/sync-history.yml'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: sync-history-main
+  cancel-in-progress: false
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+      - name: Select latest valid user script and copy files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          history = Path('历史版本')
+          candidates = []
+          for path in history.glob('开车直达*.user.js'):
+              text = path.read_text(encoding='utf-8-sig')
+              header = re.search(r'^// ==UserScript==\s*$([\s\S]*?)^// ==/UserScript==\s*$', text, re.M)
+              if not header:
+                  raise SystemExit(f'Invalid user script header: {path}')
+              version = re.search(r'^//\s*@version\s+(\S+)', header.group(1), re.M)
+              if not version or not re.fullmatch(r'\d+(?:\.\d+)*', version.group(1)):
+                  raise SystemExit(f'Missing or unsupported numeric version: {path}')
+              key = tuple(map(int, version.group(1).split('.')))
+              while len(key) > 1 and key[-1] == 0:
+                  key = key[:-1]
+              candidates.append((key, path, text))
+          if not candidates:
+              raise SystemExit('No user scripts found in history')
+          latest = max(item[0] for item in candidates)
+          winners = [item for item in candidates if item[0] == latest]
+          if len({item[2] for item in winners}) > 1:
+              raise SystemExit('Conflicting scripts with the same latest version')
+          key, path, text = sorted(winners, key=lambda item: item[1].name)[0]
+          subprocess.run(['node', '--check', str(path)], check=True)
+          readme = history / 'README.md'
+          if not readme.is_file() or not readme.read_text(encoding='utf-8').strip():
+              raise SystemExit('History README missing or empty')
+          Path('开车直达.user.js').write_text(text, encoding='utf-8')
+          Path('README.md').write_bytes(readme.read_bytes())
+          print(f'Selected: {path}, version {key}')
+          PY
+      - name: Commit synchronized files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- '开车直达.user.js' 'README.md'
+          if git diff --cached --quiet; then
+            echo 'Already synchronized.'
+            exit 0
+          fi
+          git commit -m 'chore: sync latest script and README from history'
+          git push origin HEAD:main
