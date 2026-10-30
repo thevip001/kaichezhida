@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         开车直达
-// @version      1.7.1
+// @version      1.9.0
 // @namespace    theMax24.jiaochezhida
 // @description  一键收藏网页，可以设置密码，进行私密收藏。多收藏夹，多网页收藏。
 // @author       theMax24
@@ -11,6 +11,8 @@
 // @run-at       document-start
 // @noframes
 // @license      AGPL-3.0-or-later
+// @downloadURL https://update.greasyfork.org/scripts/601972/%E5%BC%80%E8%BD%A6%E7%9B%B4%E8%BE%BE.user.js
+// @updateURL https://update.greasyfork.org/scripts/601972/%E5%BC%80%E8%BD%A6%E7%9B%B4%E8%BE%BE.meta.js
 // ==/UserScript==
 
 (function () {
@@ -97,12 +99,7 @@
   }
   if(!PANEL_SIZES[state.panelSize])state.panelSize='medium';
   if(!['black','red','yellow'].includes(state.carColor))state.carColor='black';
-  if (!Array.isArray(state.collections) || state.collections.length !== 5) {
-    state.collections = [];
-    for (let i = 0; i < 5; i++) {
-      state.collections.push({ id: 'col-' + (i + 1), name: '车库' + (i + 1), pass: '' });
-    }
-  }
+  normalizeCollections();
   if (!Array.isArray(state.sites)) state.sites = [];
   if (!state.panel || typeof state.panel.left !== 'number') state.panel = { left: 0, top: 80 };
   if (!loadState()) {
@@ -367,7 +364,17 @@
     });
     topGrid.appendChild(save);
 
+    const manual = document.createElement('div');
+    manual.className = 'sq parking-action';
+    manual.innerHTML = '<span class="ico">🚗</span><span class="sq-label">开车入库</span>';
+    manual.title = '手动输入网址并收藏';
+    manual.addEventListener('click', function () {
+      addManualSite();
+    });
+
     state.collections.forEach(function (c, i) {
+      if (i === 2) topGrid.appendChild(manual);
+
       const b = document.createElement('div');
       b.className = 'sq' + (i === activeCollection ? ' on' : '');
       b.dataset.cid = c.id;
@@ -530,6 +537,266 @@
     saveState(); render(); toast('已保存到「' + state.collections[activeCollection].name + '」');
   }
 
+
+  function collectionSites(cid) {
+    return state.sites.filter(function (s) { return s.collectionId === cid; });
+  }
+
+  function findEmptySlot(cid) {
+    const used = new Set(collectionSites(cid).map(function (x) { return x.slot; }));
+    for (let i = 0; i < 9; i++) {
+      if (!used.has(i)) return i;
+    }
+    return -1;
+  }
+
+  function normalizeCollections() {
+    if (!Array.isArray(state.collections)) state.collections = [];
+
+    // 保留前 4 个车库；旧第 5 车库的网站合并进车库 4
+    while (state.collections.length > 4) {
+      const extra = state.collections.pop();
+      const last = state.collections[state.collections.length - 1];
+      if (extra && last) {
+        collectionSites(extra.id).forEach(function (site) {
+          const slot = findEmptySlot(last.id);
+          if (slot >= 0) {
+            site.collectionId = last.id;
+            site.slot = slot;
+          }
+        });
+      }
+    }
+
+    while (state.collections.length < 4) {
+      state.collections.push({
+        id: 'col-' + (state.collections.length + 1),
+        name: '车库' + (state.collections.length + 1),
+        pass: ''
+      });
+    }
+
+    state.collections.forEach(function (c, i) {
+      if (!c.id) c.id = 'col-' + (i + 1);
+      if (!c.name) c.name = '车库' + (i + 1);
+      if (typeof c.pass !== 'string') c.pass = '';
+    });
+
+    if (state.activeCollection == null || state.activeCollection < 0 || state.activeCollection > 3) {
+      state.activeCollection = 0;
+    }
+  }
+
+  function addManualSite() {
+    const c = state.collections[activeCollection];
+    if (!c || !canAccess(c)) {
+      toast('当前收藏夹不可用');
+      return;
+    }
+
+    openModal('开车入库', `
+      <div class="jrow">
+        <label>网址</label>
+        <input id="manual-url" type="url" placeholder="https://example.com">
+      </div>
+      <div class="jrow">
+        <label>名称</label>
+        <input id="manual-name" type="text" placeholder="可选，默认使用域名">
+      </div>
+      <div class="jrow">
+        <button class="jb" id="manual-save">入库</button>
+      </div>
+    `);
+
+    document.getElementById('manual-save').onclick = function () {
+      let raw = document.getElementById('manual-url').value.trim();
+      const name = document.getElementById('manual-name').value.trim();
+
+      if (!raw) {
+        toast('请输入网址');
+        return;
+      }
+      if (!/^https?:\/\//i.test(raw)) raw = 'https://' + raw;
+
+      let u;
+      try {
+        u = new URL(raw);
+      } catch (e) {
+        toast('网址格式无效');
+        return;
+      }
+
+      const cid = c.id;
+      if (collectionSites(cid).some(function (x) { return x.url === u.href; })) {
+        toast('该网址已存在');
+        return;
+      }
+
+      const slot = findEmptySlot(cid);
+      if (slot < 0) {
+        toast('该车库已满');
+        return;
+      }
+
+      state.sites.push({
+        id: uid(),
+        collectionId: cid,
+        name: name || u.hostname,
+        url: u.href,
+        icon: favicon(u.href),
+        slot: slot
+      });
+
+      saveState();
+      closeModal();
+      render();
+      toast('已入库');
+    };
+  }
+
+  function exportBookmarksHtml() {
+    const escHtml = function (v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    };
+
+    let html = `<!DOCTYPE NETSCAPE-Bookmark-file-1>
+<!-- This is an automatically generated file.
+     It will be read and overwritten.
+     DO NOT EDIT! -->
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+<TITLE>Bookmarks</TITLE>
+<H1>Bookmarks</H1>
+<DL><p>
+`;
+
+    state.collections.forEach(function (c) {
+      const sites = collectionSites(c.id).slice().sort(function (a, b) { return a.slot - b.slot; });
+      html += `    <DT><H3>${escHtml(c.name)}</H3>\n    <DL><p>\n`;
+      sites.forEach(function (site) {
+        html += `        <DT><A HREF="${escHtml(site.url)}" ADD_DATE="${Math.floor(Date.now() / 1000)}">${escHtml(site.name)}</A>\n`;
+      });
+      html += `    </DL><p>\n`;
+    });
+
+    html += `</DL><p>\n`;
+
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '开车直达-收藏.html';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    toast('已按车库分类导出');
+  }
+
+  function importLinksInto(cid, anchors) {
+    let added = 0;
+    let skipped = 0;
+
+    anchors.forEach(function (a) {
+      const raw = a.getAttribute('href') || '';
+      if (!raw || !/^https?:\/\//i.test(raw)) {
+        skipped++;
+        return;
+      }
+
+      let u;
+      try {
+        u = new URL(raw);
+      } catch (e) {
+        skipped++;
+        return;
+      }
+
+      if (collectionSites(cid).some(function (x) { return x.url === u.href; })) {
+        skipped++;
+        return;
+      }
+
+      const slot = findEmptySlot(cid);
+      if (slot < 0) {
+        skipped++;
+        return;
+      }
+
+      state.sites.push({
+        id: uid(),
+        collectionId: cid,
+        name: (a.textContent || '').trim() || u.hostname,
+        url: u.href,
+        icon: favicon(u.href),
+        slot: slot
+      });
+
+      added++;
+    });
+
+    return { added: added, skipped: skipped };
+  }
+
+  function importBookmarksHtml() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.html,.htm,text/html';
+
+    input.onchange = function () {
+      const file = input.files && input.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function () {
+        try {
+          const doc = new DOMParser().parseFromString(reader.result, 'text/html');
+          const headings = Array.from(doc.querySelectorAll('h3'));
+          let totalAdded = 0;
+          let totalSkipped = 0;
+
+          if (headings.length) {
+            headings.forEach(function (h3) {
+              const folderName = (h3.textContent || '').trim();
+              const target = state.collections.find(function (c) { return c.name === folderName; }) ||
+                             state.collections[activeCollection];
+
+              let dl = h3.nextElementSibling;
+              if (!dl || dl.tagName !== 'DL') {
+                dl = h3.parentElement ? h3.parentElement.querySelector('dl') : null;
+              }
+
+              const anchors = dl ? Array.from(dl.querySelectorAll('a[href]')) : [];
+              const result = importLinksInto(target.id, anchors);
+              totalAdded += result.added;
+              totalSkipped += result.skipped;
+            });
+          } else {
+            const anchors = Array.from(doc.querySelectorAll('a[href]'));
+            const result = importLinksInto(state.collections[activeCollection].id, anchors);
+            totalAdded += result.added;
+            totalSkipped += result.skipped;
+          }
+
+          saveState();
+          render();
+
+          if (totalAdded) {
+            toast(`导入 ${totalAdded} 个，跳过 ${totalSkipped} 个`);
+          } else {
+            toast('没有可导入的新网站');
+          }
+        } catch (e) {
+          toast('导入失败');
+        }
+      };
+
+      reader.readAsText(file, 'utf-8');
+    };
+
+    input.click();
+  }
+
   function exportConfig() {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -553,10 +820,7 @@
           if(!data||!Array.isArray(data.collections)||data.collections.length!==5||!Array.isArray(data.sites)||data.collections.some(c=>!c||typeof c.id!=='string'||typeof c.name!=='string')||data.sites.some(x=>!x||typeof x.url!=='string'||!/^https?:/i.test(x.url)))throw new Error('Invalid config');
           if(!confirm('导入将覆盖当前配置，是否继续？'))return;
           state = Object.assign({}, DEFAULT, data);
-          if (!Array.isArray(state.collections) || state.collections.length !== 5) {
-            state.collections = [];
-            for (let i = 0; i < 5; i++) state.collections.push({ id: 'col-' + (i + 1), name: '车库' + (i + 1), pass: '' });
-          }
+          normalizeCollections();
           if(!PANEL_SIZES[state.panelSize])state.panelSize='medium';
           if(!CAR_SKINS[state.carColor])state.carColor='black';
           normalizeSlots();unlockedCollections={};activeCollection=0;applyPanel();
@@ -612,7 +876,8 @@
         <button class="jb" id="bg-upload">内舱背景图片</button>
       </div>
       <div class="jrow"><label>快捷键</label><input id="set-key" type="text" value="${esc(state.shortcut)}"><button class="jb" id="reset-shortcut">恢复 Alt+A</button></div>
-      <div class="jrow"><button class="jb" id="cfg-export">导出配置</button><button class="jb" id="cfg-import">导入配置</button></div>`);
+      <div class="jrow"><button class="jb" id="cfg-export">导出配置</button><button class="jb" id="cfg-import">导入配置</button></div>
+      <div class="jrow"><button class="jb" id="bm-export">导出收藏</button><button class="jb" id="bm-import">导入收藏</button></div>`);
 
 
     document.getElementById('appearance-size').onchange=function(){state.panelSize=this.value;applyPanel();saveState();requestAnimationFrame(fitTopLabels);};
@@ -657,6 +922,8 @@
     };
     document.getElementById('cfg-export').onclick = exportConfig;
     document.getElementById('cfg-import').onclick = importConfig;
+    document.getElementById('bm-export').onclick = exportBookmarksHtml;
+    document.getElementById('bm-import').onclick = importBookmarksHtml;
 
     const opRange = document.getElementById('op-range');
     opRange.addEventListener('input', function () {
