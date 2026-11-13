@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         开车直达
-// @version      1.9.0
+// @version      1.9.1
 // @namespace    theMax24.jiaochezhida
 // @description  一键收藏网页，可以设置密码，进行私密收藏。多收藏夹，多网页收藏。
 // @author       theMax24
@@ -17,6 +17,20 @@
 
 (function () {
   'use strict';
+
+  // Trusted Types bypass for strict CSP sites (YouTube, Google, etc.)
+  // Must run as early as possible at document-start
+  try {
+    if (window.trustedTypes && window.trustedTypes.createPolicy) {
+      window.trustedTypes.createPolicy('default', {
+        createHTML: function (s) { return s; },
+        createScript: function (s) { return s; },
+        createScriptURL: function (s) { return s; }
+      });
+    }
+  } catch (e) {
+    // Policy may already exist; ignore
+  }
 
   const KEY = 'jczd_final_v1_state';
   let FIXED_SCALE = 0.55;
@@ -1042,7 +1056,7 @@
     setupSiteTips();
     applyPanel();
     render();
-    console.log('[开车直达] v1.7.1 默认车型最终版已加载');
+    console.log('[开车直达] v1.9.1 TrustedTypes兼容版已加载');
   }
 
   if (typeof GM_registerMenuCommand === 'function') {
